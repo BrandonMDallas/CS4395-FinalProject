@@ -92,7 +92,7 @@ if __name__ == '__main__':
     engine = SearchEngine()
     engine.index_data(documents)
     
-    query = "with typescript you can set unknown as what"
+    query = "Axios"
     results = engine.search(query, top_k=2)
     print('\nSearch Results:')
     print(results[['original_text']])

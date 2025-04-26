@@ -13,7 +13,7 @@ from typing import List, Tuple
 import spacy, spacy.cli
 
 try:
-    spacy.require_gpu()  # optional, if you want GPU
+    #spacy.require_gpu()  # optional, if you want GPU
     nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
 except OSError:
     # model not found → download it, then load
