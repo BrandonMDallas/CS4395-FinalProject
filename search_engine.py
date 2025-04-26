@@ -58,25 +58,26 @@ class SearchEngine:
 
     def index_data(self, documents: List[str]) -> None:
         """
-        Split raw documents into sentences, preprocess, and build BM25 & FAISS indices.
+        Split raw documents into true sentences, preprocess each one,
+        then build BM25 & FAISS indices over the cleaned text.
         """
-        # 1) clean + sentence-split
+        # 1) Sentence‐split the *raw* docs, then clean each sentence
         sentences = []
         for doc in documents:
-            cleaned = self.index_preprocessor.preprocess(doc)
-            sentences.extend(sent_tokenize(cleaned))
+            raw_sents = sent_tokenize(doc)
+            for sent in raw_sents:
+                cleaned = self.index_preprocessor.preprocess(sent)
+                if cleaned:
+                    sentences.append((sent, cleaned))
 
-        # 2) build DataFrame
-        self.df = pd.DataFrame({"original_text": sentences})
-        self.df["processed_text"] = self.df["original_text"].apply(
-            self.index_preprocessor.preprocess
-        )
+        # 2) Build DataFrame with BOTH original and processed
+        self.df = pd.DataFrame(sentences, columns=["original_text", "processed_text"])
 
-        # 3) BM25 lexical index
-        tokenized = [text.split() for text in self.df["processed_text"]]
+        # 3) BM25 lexical index over the processed tokens
+        tokenized = [txt.split() for txt in self.df["processed_text"]]
         self.bm25 = BM25Okapi(tokenized)
 
-        # 4) FAISS semantic index
+        # 4) FAISS semantic index over the same embeddings
         embeddings = self.embedding_model.encode(
             self.df["processed_text"].tolist(),
             show_progress_bar=True,
@@ -90,39 +91,46 @@ class SearchEngine:
     def search(self, query: str, top_k: int = 10) -> pd.DataFrame:
         """
         Hybrid search:
-          1) BM25 scoring (lexical)
-          2) FAISS semantic retrieval
-          3) weighted score fusion
-          4) cross-encoder reranking
+        1) BM25 scoring (lexical)
+        2) FAISS semantic retrieval
+        3) weighted score fusion
+        4) cross-encoder reranking
         """
-        # preprocess query (keep stopwords)
+        # 1) Preprocess the query (keeps stopwords as configured)
         proc_q = self.query_preprocessor.preprocess(query)
-
-        # BM25 scores → normalize [0,1]
         tokens = proc_q.split()
+
+        # 2) BM25 scores → normalize to [0,1]
         bm25_scores = self.bm25.get_scores(tokens)
         bm25_scores = normalize(bm25_scores.reshape(1, -1))[0]
 
-        # FAISS dense retrieval
+        # 3) FAISS semantic retrieval (may return -1 for “empty” slots)
         q_emb = self.embedding_model.encode([proc_q])
         q_emb = normalize(q_emb, axis=1).astype(np.float32)
         faiss_scores, faiss_idxs = self.faiss_index.search(q_emb, top_k * 3)
         faiss_scores = faiss_scores[0]
+        raw_idxs = faiss_idxs[0]
 
-        # fuse scores: 60% semantic + 40% lexical
-        fused = {
-            idx: 0.6 * sem + 0.4 * bm25_scores[idx]
-            for idx, sem in zip(faiss_idxs[0], faiss_scores)
-        }
+        # 4) Fuse scores, but skip any negative indices
+        fused = {}
+        for idx, sem_score in zip(raw_idxs, faiss_scores):
+            if idx < 0:
+                continue
+            fused[idx] = 0.6 * sem_score + 0.4 * bm25_scores[idx]
 
-        # pick top candidates for rerank
+        # 5) Take the top-2*top_k candidates for reranking
         top_initial = sorted(fused, key=fused.get, reverse=True)[: top_k * 2]
-        candidates = self.df.loc[top_initial, "original_text"].tolist()
-        pairs = [[query, c] for c in candidates]
+
+        # 6) Gather their original text via integer‐position indexing
+        candidates = [self.df.iloc[i]["original_text"] for i in top_initial]
+
+        # 7) Rerank with cross-encoder
+        pairs = [[query, cand] for cand in candidates]
         rerank_scores = self.cross_encoder.predict(pairs)
 
-        # final top_k by rerank score
+        # 8) Pick final top_k by rerank score
         order = np.argsort(rerank_scores)[::-1][:top_k]
         final_idxs = [top_initial[i] for i in order]
 
-        return self.df.loc[final_idxs].reset_index(drop=True)
+        # 9) Return those rows, reset the index
+        return self.df.iloc[final_idxs].reset_index(drop=True)

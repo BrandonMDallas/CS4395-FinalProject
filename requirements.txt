@@ -20,6 +20,6 @@ scikit-learn>=1.2.2
 # Vector search
 faiss-cpu>=1.7.4
 
-# Web scraping (if your scrape_url uses requests + BeautifulSoup)
+# Web scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.2
