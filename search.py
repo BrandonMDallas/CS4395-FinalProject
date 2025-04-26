@@ -10,8 +10,15 @@ from typing import List, Tuple
 # ----------------------
 # 1. Preprocessing & Embeddings
 # ----------------------
-spacy.require_gpu()
-nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
+import spacy, spacy.cli
+
+try:
+    spacy.require_gpu()  # optional, if you want GPU
+    nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
+except OSError:
+    # model not found → download it, then load
+    spacy.cli.download("en_core_web_trf")
+    nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
 
 def preprocess_text(text: str) -> str:
     """Advanced text cleaning with lemmatization and entity awareness"""

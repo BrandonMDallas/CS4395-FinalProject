@@ -1,8 +1,13 @@
 import spacy
+import spacy.cli
 import re
 
 # Load spaCy model
-nlp = spacy.load("en_core_web_trf")
+try:
+    nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
+except OSError:
+    spacy.cli.download("en_core_web_trf")
+    nlp = spacy.load("en_core_web_trf", disable=["parser", "ner"])
 
 def preprocess_text(text: str, remove_stopwords: bool = True, remove_punct: bool = True) -> str:
     """
