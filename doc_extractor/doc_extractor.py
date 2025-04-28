@@ -1,6 +1,7 @@
 import os
 import json
 import fitz
+from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 '''
 This program will extract the data from the pdf break it down into 3 parts:
@@ -37,7 +38,7 @@ class DocExtractor:
         return self.model.encode(text).tolist()
 
     def process_document(self, file_path):
-        pages = self.extract_text_from_pdf(file_path)
+        pages = self.extract_text(file_path)
         entries = []
 
         title_text = pages[0]['text'][:self.chunking_sizes['title']]
@@ -62,15 +63,15 @@ class DocExtractor:
     def process_all_documents(self):
         all_embeddings = []
 
-        pdf_files = [f for f in os.listdir(self.documents_folder) 
+        pdf_files = [f for f in os.listdir(self.documents_dir) 
                     if f.lower().endswith(".pdf")]
 
         for filename in tqdm(pdf_files, desc="Processing Documents"):
-            file_path = os.path.join(self.documents_folder, filename)
+            file_path = os.path.join(self.documents_dir, filename)
             all_embeddings.extend(self.process_document(file_path))
 
         # Save embeddings with reference keys
-        with open(self.output_file, 'w') as f:
+        with open(self.output, 'w') as f:
             json.dump(all_embeddings, f, indent=2)
 
         print(f"Generated {len(all_embeddings)} embedding entries")
