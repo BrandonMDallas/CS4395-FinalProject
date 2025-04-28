@@ -23,3 +23,5 @@ faiss-cpu>=1.7.4
 # Web scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.2
+
+PyMuPDF
