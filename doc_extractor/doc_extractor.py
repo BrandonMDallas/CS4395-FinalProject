@@ -53,9 +53,18 @@ class DocExtractor:
                 detail_embedding = self.embed_text(chunk)
 
                 entries.append({
-                    'title': title_embedding,
-                    'content': content_embedding,
-                    'details': detail_embedding
+                    'title': {
+                        'text': title_text,
+                        'embedding': title_embedding,
+                    },
+                    'content': {
+                        'text': content_text,
+                        'embedding': content_embedding,
+                    },
+                    'details': {
+                        'text': chunk,
+                        'embedding': detail_embedding,
+                    },
                 })
 
         return entries
