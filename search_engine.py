@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from rank_bm25 import BM25Okapi
 import faiss
+import json
 from sklearn.preprocessing import normalize
 from typing import List, Union, Optional
 from nltk.tokenize import sent_tokenize
@@ -24,37 +25,24 @@ class SearchEngine:
 
     def __init__(
         self,
-        embedding_model: Optional[Union[str, SentenceTransformer]] = "all-MiniLM-L6-v2",
-        cross_encoder: Optional[
-            Union[str, CrossEncoder]
-        ] = "cross-encoder/ms-marco-MiniLM-L-12-v2",
-        index_preprocessor: Optional[TextPreprocessor] = None,
-        query_preprocessor: Optional[TextPreprocessor] = None,
+        embeddings_path: str = "embeddings.json",
+        model_name: str = "all-MiniLM-L6-v2",
     ):
-        # load or accept embedding model
-        if isinstance(embedding_model, str):
-            self.embedding_model = SentenceTransformer(embedding_model)
-        else:
-            self.embedding_model = embedding_model
+        # --- 1) Load embeddings.json into a DataFrame
+        with open(embeddings_path, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        self.df = pd.DataFrame(entries)
 
-        # load or accept cross-encoder
-        if isinstance(cross_encoder, str):
-            self.cross_encoder = CrossEncoder(cross_encoder)
-        else:
-            self.cross_encoder = cross_encoder
+        # --- 2) Build FAISS index over the "details" embeddings
+        detail_vecs = np.array(self.df["details"].tolist(), dtype="float32")
+        faiss.normalize_L2(detail_vecs)
 
-        # text preprocessors
-        # default index_preprocessor: remove stopwords/punct
-        self.index_preprocessor = index_preprocessor or TextPreprocessor()
-        # default query_preprocessor: keep stopwords (better BM25 matching)
-        self.query_preprocessor = query_preprocessor or TextPreprocessor(
-            remove_stopwords=False
-        )
+        dim = detail_vecs.shape[1]
+        self.faiss_index = faiss.IndexFlatIP(dim)  # inner-product for cosine
+        self.faiss_index.add(detail_vecs)
 
-        # placeholders for data & indices
-        self.df = pd.DataFrame()
-        self.bm25 = None
-        self.faiss_index = None
+        # --- 3) Load the same SentenceTransformer for query encoding
+        self.embedder = SentenceTransformer(model_name)
 
     def index_data(self, documents: List[str]) -> None:
         """
@@ -87,6 +75,25 @@ class SearchEngine:
         dim = embeddings.shape[1]
         self.faiss_index = faiss.IndexFlatIP(dim)
         self.faiss_index.add(embeddings.astype(np.float32))
+
+    def semantic_search(self, query: str, top_k: int = 5):
+        """
+        Returns the top_k text chunks most semantically similar to `query`.
+        Each result is a dict with:
+          - 'text':   the raw snippet
+          - 'score':  cosine similarity (0–1)
+        """
+        # encode & normalize
+        q_vec = self.embedder.encode([query], convert_to_numpy=True).astype("float32")
+        faiss.normalize_L2(q_vec)
+
+        # search
+        distances, indices = self.faiss_index.search(q_vec, top_k)
+        results = []
+        for idx, score in zip(indices[0], distances[0]):
+            snippet = self.df.iloc[idx]["text"]
+            results.append({"text": snippet, "score": float(score)})
+        return results
 
     def search(self, query: str, top_k: int = 10) -> pd.DataFrame:
         """
@@ -134,3 +141,10 @@ class SearchEngine:
 
         # 9) Return those rows, reset the index
         return self.df.iloc[final_idxs].reset_index(drop=True)
+
+
+if __name__ == "__main__":
+    se = SearchEngine()
+    hits = se.semantic_search("Do cats have memory?", top_k=3)
+    for res in hits:
+        print(f"Score: {res['score']:.4f}\nSnippet: {res['text']}\n---\n")
