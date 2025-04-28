@@ -19,7 +19,7 @@ we need to add this data to a data file that the search engine can reference
 class DocExtractor:
     def __init__(self):
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.documents_dir = '../documents'
+        self.documents_dir = 'documents'
         self.output = 'embeddings.json'
         self.preprocessor = TextPreprocessor()
 
