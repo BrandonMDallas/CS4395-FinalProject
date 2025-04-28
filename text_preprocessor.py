@@ -8,7 +8,7 @@ class TextPreprocessor:
         self,
         model_name: str = "en_core_web_trf",
         disable: list[str] = ["parser", "ner"],
-        remove_stopwords: bool = True,
+        remove_stopwords: bool = False,
         remove_punct: bool = True,
     ):
         """
