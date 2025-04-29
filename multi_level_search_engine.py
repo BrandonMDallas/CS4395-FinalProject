@@ -7,20 +7,15 @@ import faiss
 from sklearn.preprocessing import normalize
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from text_preprocessor import TextPreprocessor
-from nltk.tokenize import sent_tokenize
+from tqdm import tqdm
+import os
 
 
 class MultiLevelSearchEngine:
     """
     Hybrid search engine over multi-level embeddings (title, content, details),
-    building the FAISS index by streaming to avoid OOM/segfaults.
-
-    Args:
-        embeddings_path: Path to embeddings.json produced by Embedder
-                         (entries with title/content/details subfields).
-        model_name:      SentenceTransformer model name for query embeddings.
-        cross_encoder_name: CrossEncoder model name for reranking.
-        weights:         Dict of weights for each level, keys "title","content","details".
+    building the FAISS index by streaming to avoid OOM/segfaults, with a
+    byte-offset progress bar.
     """
 
     def __init__(
@@ -34,7 +29,6 @@ class MultiLevelSearchEngine:
         with open(embeddings_path, "r", encoding="utf-8") as f:
             entries = json.load(f)
 
-        # Build DataFrame, unpack nested fields
         df = pd.json_normalize(entries)
         df = df.rename(
             columns={
@@ -49,25 +43,39 @@ class MultiLevelSearchEngine:
         w = weights or {"title": 0.2, "content": 0.3, "details": 0.5}
         self.weights = w
 
-        # --- build FAISS index by streaming
-        # peek dimension
+        # --- build FAISS index by streaming with byte-offset progress
+        # 1) peek dimension from the first entry
         with open(embeddings_path, "rb") as f:
             parser = ijson.items(f, "item")
             first = next(parser)
             dim = len(first["title"]["embedding"])
-            f.seek(0)
-            parser = ijson.items(f, "item")
 
-            idx = faiss.IndexFlatIP(dim)
+        # 2) prepare index and progress bar
+        file_size = os.path.getsize(embeddings_path)
+        idx = faiss.IndexFlatIP(dim)
+
+        with open(embeddings_path, "rb") as f, tqdm(
+            total=file_size, unit="B", unit_scale=True, desc="Indexing JSON"
+        ) as pbar:
+
+            parser = ijson.items(f, "item")
+            last_pos = f.tell()
+
             for entry in parser:
+                # build the weighted vector
                 t = np.array(entry["title"]["embedding"], dtype="float32")
                 c = np.array(entry["content"]["embedding"], dtype="float32")
                 d = np.array(entry["details"]["embedding"], dtype="float32")
 
                 vec = w["title"] * t + w["content"] * c + w["details"] * d
-                # normalize single vector
+                # normalize and add to FAISS
                 faiss.normalize_L2(vec.reshape(1, -1))
                 idx.add(vec.reshape(1, -1))
+
+                # update progress by bytes consumed
+                new_pos = f.tell()
+                pbar.update(new_pos - last_pos)
+                last_pos = new_pos
 
         self.faiss_index = idx
 
@@ -150,14 +158,14 @@ class MultiLevelSearchEngine:
 
 if __name__ == "__main__":
     se = MultiLevelSearchEngine(
-        embeddings_path="embeddings_sliding.json",
+        embeddings_path="embeddings.json",
         weights={"title": 0.1, "content": 0.3, "details": 0.6},
     )
 
     print("Semantic top-5:")
-    for r in se.semantic_search("When did humans domestic dogs?", top_k=5):
+    for r in se.semantic_search("When was the leopard cat tamed?", top_k=5):
         print(f"Score {r['score']:.3f}")
-        print(" Title:  ", r["title"])
-        print(" Content:", r["content"])
+        # print(" Title:  ", r["title"])
+        # print(" Content:", r["content"])
         print(" Details:", r["details"])
         print("---")

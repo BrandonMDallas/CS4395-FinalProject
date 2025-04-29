@@ -60,8 +60,35 @@ class Embedder:
         self.output = output
 
     def extract_text(self, path: str) -> list[str]:
-        doc = fitz.open(path)
-        return [page.get_text().replace("\n", " ").strip() for page in doc]
+        """
+        Return a list of “pages.”
+        - For PDFs: one string per PDF page.
+        - For .txt: a single-element list with the entire file.
+        """
+        if path.lower().endswith(".txt"):
+            with open(path, encoding="utf-8") as f:
+                return [f.read()]
+        else:
+            doc = fitz.open(path)
+            return [page.get_text().replace("\n", " ").strip() for page in doc]
+
+    def extract_title(self, path: str, pages: list[str]) -> str:
+        """
+        Try metadata (PDF), then first non-empty line, then filename fallback.
+        """
+        if path.lower().endswith(".pdf"):
+            meta = fitz.open(path).metadata.get("title", "").strip()
+            if meta:
+                return meta
+
+        # For both PDF fallback and TXT: first real line
+        for line in pages[0].splitlines():
+            text = line.strip()
+            if len(text) > 5:  # skip blank or super-short lines
+                return text
+
+        # Last resort: filename without extension
+        return os.path.splitext(os.path.basename(path))[0].replace("_", " ")
 
     def chunk_text(self, text: str) -> list[str]:
         """
@@ -111,22 +138,16 @@ class Embedder:
         Returns a list of entries, each with nested embeddings.
         """
         pages = self.extract_text(path)
-        entries = []
-
-        # Title level: use first page and truncate
-        title_text = pages[0][: self.chunking_sizes["title"]]
+        title_text = self.extract_title(path, pages)
         title_emb = self.embed_text(title_text)
 
+        entries = []
         for page_text in pages:
-            # Content level: truncate each page
             content_text = page_text[: self.chunking_sizes["content"]]
             content_emb = self.embed_text(content_text)
 
-            # Details level: full page chunks
-            detail_chunks = self.chunk_text(page_text)
-            for chunk in detail_chunks:
+            for chunk in self.chunk_text(page_text):
                 detail_emb = self.embed_text(chunk)
-
                 entries.append(
                     {
                         "title": {"text": title_text, "embedding": title_emb},
@@ -134,7 +155,6 @@ class Embedder:
                         "details": {"text": chunk, "embedding": detail_emb},
                     }
                 )
-
         return entries
 
     def process_all_documents(self):
@@ -153,8 +173,8 @@ class Embedder:
 
 if __name__ == "__main__":
     e = Embedder(
-        chunk_method="sliding",
-        chunk_params={"size": 1000, "overlap": 500},
-        chunking_sizes={"title": 250, "content": 750, "details": 1000},
+        chunk_method="sentence",
+        chunk_params={"max_chars": 400, "overlap_sents": 2},
+        chunking_sizes={"title": 250, "content": 750},
     )
     e.process_all_documents()
