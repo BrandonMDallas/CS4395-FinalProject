@@ -163,7 +163,7 @@ if __name__ == "__main__":
     )
 
     print("Semantic top-5:")
-    for r in se.semantic_search("When was the leopard cat tamed?", top_k=5):
+    for r in se.semantic_search("Where did the word cat come from?", top_k=5):
         print(f"Score {r['score']:.3f}")
         # print(" Title:  ", r["title"])
         # print(" Content:", r["content"])
