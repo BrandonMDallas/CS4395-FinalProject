@@ -28,21 +28,34 @@ class SearchEngine:
         embeddings_path: str = "embeddings.json",
         model_name: str = "all-MiniLM-L6-v2",
     ):
-        # --- 1) Load embeddings.json into a DataFrame
+        # 1) Load raw_text + embedding entries
         with open(embeddings_path, "r", encoding="utf-8") as f:
             entries = json.load(f)
-        self.df = pd.DataFrame(entries)
+        self.df = pd.DataFrame(entries)  # columns: raw_text, embedding
 
-        # --- 2) Build FAISS index over the "details" embeddings
-        detail_vecs = np.array(self.df["details"].tolist(), dtype="float32")
-        faiss.normalize_L2(detail_vecs)
+        # 2) Build FAISS index over those embeddings
+        vecs = np.array(self.df["embedding"].tolist(), dtype="float32")
+        faiss.normalize_L2(vecs)
+        dim = vecs.shape[1]
+        self.faiss_index = faiss.IndexFlatIP(dim)
+        self.faiss_index.add(vecs)
 
-        dim = detail_vecs.shape[1]
-        self.faiss_index = faiss.IndexFlatIP(dim)  # inner-product for cosine
-        self.faiss_index.add(detail_vecs)
+        # 3) Set up preprocessors
+        #    – one for building BM25 (drops stopwords)
+        #    – one for query time (keeps stopwords)
+        self.index_preprocessor = TextPreprocessor(remove_stopwords=True)
+        self.query_preprocessor = TextPreprocessor(remove_stopwords=False)
 
-        # --- 3) Load the same SentenceTransformer for query encoding
+        # 4) Build BM25 lexical index on the same raw_text chunks
+        processed = [
+            self.index_preprocessor.preprocess(text) for text in self.df["raw_text"]
+        ]
+        tokenized = [txt.split() for txt in processed]
+        self.bm25 = BM25Okapi(tokenized)
         self.embedder = SentenceTransformer(model_name)
+
+        # 5) Store processed text if you need to inspect it later
+        self.df["processed_text"] = processed
 
     def index_data(self, documents: List[str]) -> None:
         """
@@ -77,22 +90,18 @@ class SearchEngine:
         self.faiss_index.add(embeddings.astype(np.float32))
 
     def semantic_search(self, query: str, top_k: int = 5):
-        """
-        Returns the top_k text chunks most semantically similar to `query`.
-        Each result is a dict with:
-          - 'text':   the raw snippet
-          - 'score':  cosine similarity (0–1)
-        """
-        # encode & normalize
-        q_vec = self.embedder.encode([query], convert_to_numpy=True).astype("float32")
+        # preprocess query for embedding
+        q_emb = self.query_preprocessor.preprocess(query)
+        q_vec = self.embedder.encode([q_emb], convert_to_numpy=True).astype("float32")
         faiss.normalize_L2(q_vec)
 
-        # search
+        # FAISS search
         distances, indices = self.faiss_index.search(q_vec, top_k)
         results = []
         for idx, score in zip(indices[0], distances[0]):
-            snippet = self.df.iloc[idx]["text"]
-            results.append({"text": snippet, "score": float(score)})
+            results.append(
+                {"text": self.df.iloc[idx]["raw_text"], "score": float(score)}
+            )
         return results
 
     def search(self, query: str, top_k: int = 10) -> pd.DataFrame:
@@ -145,6 +154,6 @@ class SearchEngine:
 
 if __name__ == "__main__":
     se = SearchEngine()
-    hits = se.semantic_search("Do cats have memory?", top_k=3)
+    hits = se.semantic_search("Cat intelligence?", top_k=3)
     for res in hits:
         print(f"Score: {res['score']:.4f}\nSnippet: {res['text']}\n---\n")

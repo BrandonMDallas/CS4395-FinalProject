@@ -1,7 +1,7 @@
 from wikipedia_fetcher import WikipediaFetcher
 
 wf = WikipediaFetcher(user_agent="WikiBot/2.0")
-title = "Cat"
+title = "Nasdaq"
 
 # 1) Fetch the raw extract
 text = wf.fetch_text(title)
