@@ -150,7 +150,7 @@ class MultiLevelSearchEngine:
 
 if __name__ == "__main__":
     se = MultiLevelSearchEngine(
-        embeddings_path="embeddings.json",
+        embeddings_path="embeddings_sliding.json",
         weights={"title": 0.1, "content": 0.3, "details": 0.6},
     )
 
