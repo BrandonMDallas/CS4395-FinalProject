@@ -98,6 +98,34 @@ class MultiLevelSearchEngine:
         self.df["combined_text"] = raw_texts
         self.df["bm25_tokens"] = tokenized
 
+    def lexical_search(self, query: str, top_k: int = 10):
+        """
+        Pure-lexical (BM25) search over combined_text.
+        """
+        # 1) preprocess & tokenize
+        proc_q = self.query_preprocessor.preprocess(query)
+        tokens = proc_q.split()
+
+        # 2) score with BM25
+        bm25_scores = self.bm25.get_scores(tokens)
+
+        # 3) pick top_k indices
+        top_idxs = np.argsort(bm25_scores)[::-1][:top_k]
+
+        # 4) assemble results
+        results = []
+        for i in top_idxs:
+            row = self.df.iloc[i]
+            results.append(
+                {
+                    "score": float(bm25_scores[i]),
+                    "title": row["title_text"],
+                    "content": row["content_text"],
+                    "details": row["details_text"],
+                }
+            )
+        return results
+
     def semantic_search(self, query: str, top_k: int = 5):
         proc = self.query_preprocessor.preprocess(query)
         q_vec = self.embedder.encode([proc], convert_to_numpy=True).astype("float32")
@@ -155,6 +183,35 @@ class MultiLevelSearchEngine:
 
         return self.df.iloc[final_idxs].reset_index(drop=True)
 
+    def hybrid_search_dicts(self, query: str, top_k: int = 5, alpha: float = 0.5):
+        proc_q = self.query_preprocessor.preprocess(query)
+        tokens = proc_q.split()
+
+        bm25_scores = self.bm25.get_scores(tokens)
+        bm25_min, bm25_max = bm25_scores.min(), bm25_scores.max()
+        bm25_norm = (bm25_scores - bm25_min) / (bm25_max - bm25_min + 1e-8)
+
+        q_vec = self.embedder.encode([proc_q], convert_to_numpy=True).astype("float32")
+        faiss.normalize_L2(q_vec)
+        dists, _ = self.faiss_index.search(q_vec, self.df.shape[0])
+        sem_scores = dists[0]
+        sem_min, sem_max = sem_scores.min(), sem_scores.max()
+        sem_norm = (sem_scores - sem_min) / (sem_max - sem_min + 1e-8)
+
+        fused = alpha * bm25_norm + (1 - alpha) * sem_norm
+        top_idxs = np.argsort(fused)[::-1][:top_k]
+
+        # Build dicts
+        return [
+            {
+                "score": float(fused[i]),
+                "title": self.df.at[i, "title_text"],
+                "content": self.df.at[i, "content_text"],
+                "details": self.df.at[i, "details_text"],
+            }
+            for i in top_idxs
+        ]
+
 
 if __name__ == "__main__":
     se = MultiLevelSearchEngine(
@@ -162,10 +219,18 @@ if __name__ == "__main__":
         weights={"title": 0.1, "content": 0.3, "details": 0.6},
     )
 
-    print("Semantic top-5:")
-    for r in se.semantic_search("Where did the word cat come from?", top_k=5):
-        print(f"Score {r['score']:.3f}")
-        # print(" Title:  ", r["title"])
-        # print(" Content:", r["content"])
-        print(" Details:", r["details"])
-        print("---")
+    query = "Where did the word cat come from?"
+    top_k = 5
+
+    for name, search_fn in [
+        ("Lexical", se.lexical_search),
+        ("Semantic", se.semantic_search),
+        ("Hybrid", se.hybrid_search_dicts),
+    ]:
+        print(f"{name} top-{top_k}:")
+        for r in search_fn(query, top_k=top_k):
+            print(f"Score {r['score']:.3f}")
+            detail = r.get("details") or r.get("content") or ""
+            print(" Details:", detail)
+            print("---")
+        print()
